@@ -3,10 +3,20 @@ defmodule Kvasir.Source.Kafka do
   Documentation for Kvasir.Kafka.
   """
   @behaviour Kvasir.Source
+  alias Kvasir.Kafka.OffsetTracker
+  alias Kvasir.Offset
   import Kvasir.Kafka, only: [decode: 3]
 
   @impl Kvasir.Source
-  def contains?(_name, _, _), do: :maybe
+  def contains?(name, topic, offset) do
+    :maybe
+    # case Offset.compare(OffsetTracker.offset(topic), offset) do
+    #   :eq -> true
+    #   :lt -> true
+    #   :gt -> false
+    #   :mixed -> :maybe
+    # end
+  end
 
   @impl Kvasir.Source
   def child_spec(name, opts \\ []) do
@@ -26,13 +36,19 @@ defmodule Kvasir.Source.Kafka do
     if init = opts[:initialize] do
       Kvasir.Kafka.create_topics(name, init)
 
-      Enum.each(init, fn {topic, partitions} ->
-        Enum.each(0..(partitions - 1), &preconnect(name, topic, &1))
+      init
+      |> Enum.map(fn {topic, partitions} ->
+        Task.async(fn ->
+          0..(partitions - 1)
+          |> Enum.map(fn p -> Task.async(fn -> preconnect(name, topic, p) end) end)
+          |> Enum.each(&Task.await(&1, 15_000))
+        end)
       end)
+      |> Enum.each(&Task.await(&1, 60_000))
     end
 
     children = [
-      Kvasir.Kafka.OffsetTracker.child_spec(opts[:initialize], servers, conn_config)
+      OffsetTracker.child_spec(opts[:initialize], servers, conn_config)
     ]
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Module.concat(name, Supervisor))
@@ -112,14 +128,13 @@ defmodule Kvasir.Source.Kafka do
 
         k = opts[:key] || opts[:id] ->
           p = topic.key.partition(k, topic.partitions)
+          Offset.create(p, OffsetTracker.offset(topic.topic, p))
 
-          Kvasir.Offset.create(
-            p,
-            Kvasir.Kafka.OffsetTracker.offset(topic.topic, p)
-          )
+        p = opts[:partition] ->
+          Offset.create(p, OffsetTracker.offset(topic.topic, p))
 
         :all ->
-          Kvasir.Kafka.OffsetTracker.offset(topic.topic)
+          OffsetTracker.offset(topic.topic)
       end
 
     filter =
@@ -170,7 +185,7 @@ defmodule Kvasir.Source.Kafka do
     next = off + 1
 
     if total > next do
-      {acc ++ values, Kvasir.Offset.set(a, p, next)}
+      {acc ++ values, Offset.set(a, p, next)}
     else
       {acc ++ values, %{a | partitions: Map.delete(a.partitions, p)}}
     end
@@ -183,7 +198,7 @@ defmodule Kvasir.Source.Kafka do
              topic.topic,
              partition,
              offset,
-             %{max_bytes: 1024, max_wait_time: 0}
+             %{max_bytes: 1024 * 1024, max_wait_time: 0}
            ) do
       continue = if e = List.last(m), do: Kvasir.Kafka.offset(e), else: offset
       {total, continue, m |> Enum.filter(filter) |> Enum.map(&decode(&1, topic, partition))}
