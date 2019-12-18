@@ -8,7 +8,7 @@ defmodule Kvasir.Source.Kafka do
   import Kvasir.Kafka, only: [decode: 3]
 
   @impl Kvasir.Source
-  def contains?(name, topic, offset) do
+  def contains?(_name, _topic, _offset) do
     :maybe
     # case Offset.compare(OffsetTracker.offset(topic), offset) do
     #   :eq -> true
