@@ -28,7 +28,11 @@ defmodule Kvasir.Source.Kafka do
 
   def start_link(name, opts \\ []) do
     servers = prepare_servers(opts[:servers])
-    conn_config = Keyword.drop(opts, ~w(servers initialize)a)
+
+    conn_config =
+      [allow_topic_auto_creation: false]
+      |> Keyword.merge(opts)
+      |> Keyword.drop(~w(servers initialize auto_create_topics auto_create_config)a)
 
     {:ok, _} = :application.ensure_all_started(:brod)
     :ok = :brod.start_client(servers, name, conn_config)
