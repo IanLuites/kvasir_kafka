@@ -38,7 +38,8 @@ defmodule Kvasir.Source.Kafka do
     :ok = :brod.start_client(servers, name, conn_config)
 
     if init = opts[:initialize] do
-      Kvasir.Kafka.create_topics(name, init)
+      if opts[:auto_create_topics] in [true, "TRUE", "1"],
+        do: Kvasir.Kafka.create_topics(name, init, opts[:auto_create_config] || %{})
 
       init
       |> Enum.map(fn {topic, partitions} ->
