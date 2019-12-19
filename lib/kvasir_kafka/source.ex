@@ -95,7 +95,7 @@ defmodule Kvasir.Source.Kafka do
          {:ok, data} <- Jason.encode(Map.delete(d, :meta)) do
       {key, partition} =
         case m do
-          %{key: k, partition: p} -> {k, p}
+          %{key: k, partition: p} -> {to_string(k), p}
           _ -> {nil, nil}
         end
 
@@ -109,7 +109,7 @@ defmodule Kvasir.Source.Kafka do
          {:ok, data} <- Jason.encode(Map.delete(d, :meta)) do
       {key, partition} =
         case m do
-          %{key: k, partition: p} -> {k, p}
+          %{key: k, partition: p} -> {to_string(k), p}
           _ -> {nil, nil}
         end
 
