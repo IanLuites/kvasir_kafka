@@ -132,7 +132,7 @@ defmodule Kvasir.Source.Kafka do
           f
 
         k = opts[:key] || opts[:id] ->
-          p = topic.key.partition(k, topic.partitions)
+          {:ok, p} = topic.key.partition(k, topic.partitions)
           Offset.create(p, OffsetTracker.offset(topic.topic, p))
 
         p = opts[:partition] ->
