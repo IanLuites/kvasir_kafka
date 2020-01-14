@@ -17,6 +17,26 @@ defmodule Kvasir.Kafka do
     end
   end
 
+  def decode?(
+        filter,
+        {:kafka_message, offset, key, payload, _, _timestamp, _meta},
+        topic,
+        partition
+      ) do
+    with {:ok, %{"type" => t, "version" => v, "payload" => p}} <- Jason.decode(payload) do
+      if filter.(t) do
+        Kvasir.Event.Encoding.decode(topic, %{
+          type: t,
+          version: v,
+          meta: %{topic: topic.topic, offset: offset, partition: partition, key: key},
+          payload: p
+        })
+      else
+        :ok
+      end
+    end
+  end
+
   @base_topic_config %{
     "cleanup.policy" => "delete",
     "max.message.bytes" => "20485760",
