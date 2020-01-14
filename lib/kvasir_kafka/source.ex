@@ -30,7 +30,12 @@ defmodule Kvasir.Source.Kafka do
     servers = prepare_servers(opts[:servers])
 
     conn_config =
-      [allow_topic_auto_creation: false]
+      [
+        auto_start_producers: true,
+        allow_topic_auto_creation: false,
+        default_producer_config: [],
+        reconnect_cool_down_seconds: 5
+      ]
       |> Keyword.merge(opts)
       |> Keyword.drop(~w(servers initialize auto_create_topics auto_create_config)a)
 
