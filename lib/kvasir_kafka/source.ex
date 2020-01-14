@@ -120,8 +120,35 @@ defmodule Kvasir.Source.Kafka do
   ### Reading ###
 
   @impl Kvasir.Source
-  def subscribe(_client, _topic, _partition) do
-    :ok
+  def subscribe(client, topic, callback_module, opts \\ []) do
+    offset =
+      if f = opts[:from] do
+        f
+      else
+        Offset.create(Map.new(0..(topic.partitions - 1), &{&1, :earliest}))
+      end
+
+    begin = offset.partitions |> Map.values() |> Enum.reduce(&Offset.min/2)
+
+    pre_filter =
+      case opts[:only] do
+        nil ->
+          fn _ -> true end
+
+        events ->
+          types = Enum.map(events, & &1.__event__(:type))
+          &(&1 in types)
+      end
+
+    :brod_group_subscriber_v2.start_link(%{
+      client: client,
+      group_id: opts[:group],
+      consumer_config: [begin_offset: begin],
+      cb_module: Kvasir.Kafka.Subscriber,
+      topics: [topic.topic],
+      message_type: :message,
+      init_data: {topic, offset, pre_filter, callback_module, opts[:state]}
+    })
   end
 
   @impl Kvasir.Source
