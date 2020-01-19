@@ -157,6 +157,34 @@ defmodule Kvasir.Source.Kafka do
   end
 
   @impl Kvasir.Source
+  def listen(client, topic, callback, opts \\ []) do
+    {partitions, resume_offsets} =
+      if f = opts[:from] do
+        p = f.partitions
+        {Map.keys(p), Enum.map(p, fn {k, v} -> {k, v} end)}
+      else
+        {Enum.map(0..(topic.partitions - 1), & &1), []}
+      end
+
+    :brod_topic_subscriber.start_link(
+      client,
+      topic.topic,
+      partitions,
+      # [begin_offset: :earliest]
+      _consumerConfig = [begin_offset: :latest],
+      resume_offsets,
+      :message,
+      &listen_call/3,
+      {topic, callback}
+    )
+  end
+
+  defp listen_call(partition, message, {topic, callback}) do
+    :ok = callback.(Kvasir.Kafka.decode(message, topic, partition))
+    {:ok, :ack, {topic, callback}}
+  end
+
+  @impl Kvasir.Source
   def stream(client, topic, opts \\ []) do
     offset =
       cond do
