@@ -5,6 +5,10 @@ defmodule Kvasir.Kafka do
 
   def offset({:kafka_message, offset, _key, _payload, _, _timestamp, _meta}), do: offset
 
+  def decode({:kafka_message_set, topic, partition, _, messages}, _topic, _partition) do
+    Enum.map(messages, &decode(&1, topic, partition))
+  end
+
   def decode({:kafka_message, offset, key, payload, _, _timestamp, _meta}, topic, partition) do
     with {:ok, %{"type" => t, "version" => v, "payload" => p}} <- Jason.decode(payload) do
       Kvasir.Event.Encoding.decode(topic, %{
