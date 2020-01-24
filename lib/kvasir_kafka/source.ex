@@ -145,15 +145,28 @@ defmodule Kvasir.Source.Kafka do
           &(&1 in types)
       end
 
-    :brod_group_subscriber_v2.start_link(%{
-      client: client,
-      group_id: opts[:group],
-      consumer_config: [begin_offset: begin],
-      cb_module: Kvasir.Kafka.Subscriber,
-      topics: [topic.topic],
-      message_type: :message,
-      init_data: {topic, offset, pre_filter, callback_module, opts[:state]}
-    })
+    starter = self()
+
+    fn ->
+      with {:ok, c} <- client_start_link(client),
+           {:ok, _} <-
+             :brod_group_subscriber_v2.start_link(%{
+               client: c,
+               group_id: opts[:group],
+               consumer_config: [begin_offset: begin],
+               cb_module: Kvasir.Kafka.Subscriber,
+               topics: [topic.topic],
+               message_type: :message,
+               init_data: {topic, offset, pre_filter, callback_module, opts[:state]}
+             }) do
+        send(starter, :subscriber_up)
+        Process.sleep(:infinity)
+      else
+        err -> send(starter, {:subscriber_failed, err})
+      end
+    end
+    |> spawn_link
+    |> wait_for_subscribe()
   end
 
   @impl Kvasir.Source
@@ -166,17 +179,70 @@ defmodule Kvasir.Source.Kafka do
         {Enum.map(0..(topic.partitions - 1), & &1), []}
       end
 
-    :brod_topic_subscriber.start_link(
-      client,
-      topic.topic,
-      partitions,
-      # [begin_offset: :earliest]
-      _consumerConfig = [begin_offset: :latest],
-      resume_offsets,
-      :message,
-      &listen_call/3,
-      {topic, callback}
-    )
+    starter = self()
+
+    fn ->
+      with {:ok, c} <- client_start_link(client),
+           {:ok, _} <-
+             :brod_topic_subscriber.start_link(
+               c,
+               topic.topic,
+               partitions,
+               # [begin_offset: :earliest]
+               _consumerConfig = [begin_offset: :latest],
+               resume_offsets,
+               :message,
+               &listen_call/3,
+               {topic, callback}
+             ) do
+        send(starter, :subscriber_up)
+        Process.sleep(:infinity)
+      else
+        err -> send(starter, {:subscriber_failed, err})
+      end
+    end
+    |> spawn_link
+    |> wait_for_subscribe()
+  end
+
+  defp wait_for_subscribe(controller) do
+    receive do
+      :subscriber_up ->
+        if Process.link(controller) do
+          {:ok, controller}
+        else
+          {:error, :subscribe_failed}
+        end
+
+      {:subscriber_failed, err} ->
+        err
+    after
+      5_000 ->
+        Process.exit(controller, :kill)
+        {:error, :subscribe_timeout}
+    end
+  end
+
+  @spec client_start_link(atom) :: {:ok, atom} | {:error, term}
+  def client_start_link(client) do
+    {:state, _, hosts, _, _, _, _, c, _} = client |> Process.whereis() |> :sys.get_state()
+    config = Keyword.take(c, ~w(reconnect_cool_down_seconds query_api_versions ssl)a)
+    name = free_client()
+
+    with {:ok, _} <- :brod.start_link_client(hosts, name, config) do
+      {:ok, name}
+    end
+  end
+
+  @spec free_client(non_neg_integer) :: atom
+  defp free_client(id \\ 0) do
+    client = :"Elixir.Kvasir.Kafka.Client#{id}"
+
+    if Process.whereis(client) do
+      free_client(id + 1)
+    else
+      client
+    end
   end
 
   defp listen_call(partition, message, {topic, callback}) do
