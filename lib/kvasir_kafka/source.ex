@@ -226,7 +226,7 @@ defmodule Kvasir.Source.Kafka do
   @spec client_start_link(atom) :: {:ok, atom} | {:error, term}
   def client_start_link(client) do
     {:state, _, hosts, _, _, _, _, c, _} = client |> Process.whereis() |> :sys.get_state()
-    config = Keyword.take(c, ~w(reconnect_cool_down_seconds query_api_versions ssl)a)
+    config = Keyword.take(c, ~w(query_api_versions reconnect_cool_down_seconds sasl ssl)a)
     name = free_client()
 
     with {:ok, _} <- :brod.start_link_client(hosts, name, config) do
