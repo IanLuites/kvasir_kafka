@@ -270,8 +270,13 @@ defmodule Kvasir.Source.Kafka do
 
     filter =
       case opts[:key] do
-        nil -> fn _ -> true end
-        key -> fn {:kafka_message, _, k, _, _, _, _} -> k == key end
+        nil ->
+          fn _ -> true end
+
+        key ->
+          {:ok, m} = topic.key.dump(key, [])
+          m = to_string(m)
+          fn {:kafka_message, _, k, _, _, _, _} -> k == m end
       end
 
     if Enum.count(offset.partitions) == 1 do
