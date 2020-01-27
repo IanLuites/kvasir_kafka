@@ -124,6 +124,17 @@ defmodule Kvasir.Source.Kafka do
 
   ### Reading ###
 
+  defp pre_filter(opts) do
+    case opts[:only] do
+      nil ->
+        fn _ -> true end
+
+      events ->
+        types = Enum.map(events, &if(is_binary(&1), do: &1, else: &1.__event__(:type)))
+        &(&1 in types)
+    end
+  end
+
   @impl Kvasir.Source
   def subscribe(client, topic, callback_module, opts \\ []) do
     offset =
@@ -134,16 +145,6 @@ defmodule Kvasir.Source.Kafka do
       end
 
     begin = offset.partitions |> Map.values() |> Enum.reduce(&Offset.min/2)
-
-    pre_filter =
-      case opts[:only] do
-        nil ->
-          fn _ -> true end
-
-        events ->
-          types = Enum.map(events, & &1.__event__(:type))
-          &(&1 in types)
-      end
 
     starter = self()
 
@@ -157,7 +158,7 @@ defmodule Kvasir.Source.Kafka do
                cb_module: Kvasir.Kafka.Subscriber,
                topics: [topic.topic],
                message_type: :message,
-               init_data: {topic, offset, pre_filter, callback_module, opts[:state]}
+               init_data: {topic, offset, pre_filter(opts), callback_module, opts[:state]}
              }) do
         send(starter, :subscriber_up)
         Process.sleep(:infinity)
@@ -193,7 +194,7 @@ defmodule Kvasir.Source.Kafka do
                resume_offsets,
                :message,
                &listen_call/3,
-               {topic, callback}
+               {topic, callback, pre_filter(opts)}
              ) do
         send(starter, :subscriber_up)
         Process.sleep(:infinity)
@@ -245,9 +246,16 @@ defmodule Kvasir.Source.Kafka do
     end
   end
 
-  defp listen_call(partition, message, {topic, callback}) do
-    :ok = callback.(Kvasir.Kafka.decode(message, topic, partition))
-    {:ok, :ack, {topic, callback}}
+  defp listen_call(partition, message, {topic, callback, pre_filter}) do
+    listened =
+      with {:ok, e} <- Kvasir.Kafka.decode?(pre_filter, message, topic, partition),
+           do: callback.(e)
+
+    if listened == :ok do
+      {:ok, :ack, {topic, callback, pre_filter}}
+    else
+      listened
+    end
   end
 
   @impl Kvasir.Source
