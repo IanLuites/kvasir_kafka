@@ -2,6 +2,10 @@ defmodule Kvasir.Kafka.Subscriber do
   def init(_group = %{partition: p}, {topic, offset, pre_filter, callback_module, state}) do
     {:ok, new_state} = callback_module.init(topic, p, state)
 
+    if parent = :"$ancestors" |> Process.get([]) |> List.last() do
+      Process.link(parent)
+    end
+
     {:ok,
      %{
        topic: topic,
