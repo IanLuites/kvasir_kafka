@@ -5,7 +5,7 @@ defmodule Kvasir.Source.Kafka do
   @behaviour Kvasir.Source
   alias Kvasir.Kafka.OffsetTracker
   alias Kvasir.Offset
-  import Kvasir.Kafka, only: [decode: 3]
+  import Kvasir.Kafka, only: [decode: 5]
 
   @impl Kvasir.Source
   def contains?(_name, _topic, _offset) do
@@ -96,44 +96,28 @@ defmodule Kvasir.Source.Kafka do
 
   @impl Kvasir.Source
   def publish(client, topic, event) do
-    with {:ok, d = %{meta: m}} <- Kvasir.Event.Encoding.encode(topic, event),
-         {:ok, data} <- Jason.encode(Map.delete(d, :meta)) do
-      {key, partition} =
-        case m do
-          %{key: k, partition: p} -> {to_string(k), p}
-          _ -> {nil, nil}
-        end
+    key = Kvasir.Event.key(event)
 
-      do_publish(client, topic, event, partition, key, data)
+    with {:ok, k} <- topic.key.dump(key, []),
+         {:ok, p} <- topic.key.partition(key, topic.partitions),
+         {:ok, data} <- topic.module.bin_encode(event) do
+      do_publish(client, topic.topic, p, to_string(k), data)
     end
   end
 
   @impl Kvasir.Source
-  def commit(client, topic, event) do
-    with {:ok, d = %{meta: m}} <- Kvasir.Event.Encoding.encode(topic, event),
-         {:ok, data} <- Jason.encode(Map.delete(d, :meta)) do
-      {key, partition} =
-        case m do
-          %{key: k, partition: p} -> {to_string(k), p}
-          _ -> {nil, nil}
-        end
+  def commit(client, topic, event)
 
-      do_commit(client, topic, event, partition, key, data)
+  def commit(client, topic, event = %{__meta__: meta = %{key: key}}) do
+    with {:ok, k} <- topic.key.dump(key, []),
+         {:ok, p} <- topic.key.partition(key, topic.partitions),
+         e = %{event | __meta__: %{meta | key: nil, topic: nil, partition: nil}},
+         {:ok, data} <- topic.module.bin_encode(e) do
+      do_commit(client, event, topic.topic, p, to_string(k), data)
     end
   end
 
   ### Reading ###
-
-  defp pre_filter(opts) do
-    case opts[:only] do
-      nil ->
-        fn _ -> true end
-
-      events ->
-        types = Enum.map(events, &if(is_binary(&1), do: &1, else: &1.__event__(:type)))
-        &(&1 in types)
-    end
-  end
 
   @impl Kvasir.Source
   def subscribe(client, topic, callback_module, opts \\ []) do
@@ -145,6 +129,8 @@ defmodule Kvasir.Source.Kafka do
       end
 
     begin = offset.partitions |> Map.values() |> Enum.reduce(&Offset.min/2)
+
+    decoder = if(only = opts[:only], do: topic.module.filter(only), else: topic.module)
 
     starter = self()
 
@@ -158,7 +144,7 @@ defmodule Kvasir.Source.Kafka do
                cb_module: Kvasir.Kafka.Subscriber,
                topics: [topic.topic],
                message_type: :message,
-               init_data: {topic, offset, pre_filter(opts), callback_module, opts[:state]}
+               init_data: {topic, offset, decoder, callback_module, opts[:state]}
              }) do
         send(starter, :subscriber_up)
         Process.sleep(:infinity)
@@ -182,6 +168,8 @@ defmodule Kvasir.Source.Kafka do
 
     starter = self()
 
+    decoder = if(only = opts[:only], do: topic.module.filter(only), else: topic.module)
+
     fn ->
       with {:ok, c} <- client_start_link(client),
            {:ok, _} <-
@@ -194,7 +182,7 @@ defmodule Kvasir.Source.Kafka do
                resume_offsets,
                :message,
                &listen_call/3,
-               {topic, callback, pre_filter(opts)}
+               {topic, callback, decoder}
              ) do
         send(starter, :subscriber_up)
         Process.sleep(:infinity)
@@ -246,13 +234,13 @@ defmodule Kvasir.Source.Kafka do
     end
   end
 
-  defp listen_call(partition, message, {topic, callback, pre_filter}) do
+  defp listen_call(partition, message, {topic, callback, decoder}) do
     listened =
-      with {:ok, e} <- Kvasir.Kafka.decode?(pre_filter, message, topic, partition),
+      with {:ok, e} <- Kvasir.Kafka.decode?(decoder, message, topic, partition),
            do: callback.(e)
 
     if listened == :ok do
-      {:ok, :ack, {topic, callback, pre_filter}}
+      {:ok, :ack, {topic, callback, decoder}}
     else
       listened
     end
@@ -276,7 +264,7 @@ defmodule Kvasir.Source.Kafka do
           OffsetTracker.offset(topic.topic)
       end
 
-    filter =
+    pre_filter =
       case opts[:key] do
         nil ->
           fn _ -> true end
@@ -286,6 +274,8 @@ defmodule Kvasir.Source.Kafka do
           m = to_string(m)
           fn {:kafka_message, _, k, _, _, _, _} -> k == m end
       end
+
+    decoder = if(only = opts[:events], do: topic.module.filter(only), else: topic.module)
 
     if Enum.count(offset.partitions) == 1 do
       # Single Read
@@ -298,7 +288,9 @@ defmodule Kvasir.Source.Kafka do
 
            f = %{partitions: p} ->
              p
-             |> Enum.map(fn {p, o} -> {p, read(client, topic, filter, p, o)} end)
+             |> Enum.map(fn {p, o} ->
+               {p, read(client, topic.topic, topic.key, decoder, pre_filter, p, o)}
+             end)
              |> Enum.reduce({[], f}, &reducer/2)
          end,
          fn _ -> :ok end
@@ -315,7 +307,10 @@ defmodule Kvasir.Source.Kafka do
            f = %{partitions: p} ->
              p
              |> Enum.map(fn {p, o} ->
-               {p, Task.async(fn -> read(client, topic, filter, p, o) end)}
+               {p,
+                Task.async(fn ->
+                  read(client, topic.topic, topic.key, decoder, pre_filter, p, o)
+                end)}
              end)
              |> Enum.map(fn {p, task} -> {p, Task.await(task)} end)
              |> Enum.reduce({[], f}, &reducer/2)
@@ -335,34 +330,49 @@ defmodule Kvasir.Source.Kafka do
     end
   end
 
-  defp read(client, topic, filter, partition, offset) do
+  defp read(client, topic, key, decoder, filter, partition, offset) do
     with {:ok, {total, m}} =
            :brod.fetch(
              client,
-             topic.topic,
+             topic,
              partition,
              offset,
              %{max_bytes: 1024 * 1024, max_wait_time: 0}
            ) do
       continue = if e = List.last(m), do: Kvasir.Kafka.offset(e), else: offset
-      {total, continue, m |> Enum.filter(filter) |> Enum.map(&decode(&1, topic, partition))}
+
+      {total, continue,
+       m
+       |> Enum.filter(filter)
+       |> Enum.map(&decode(&1, topic, key, decoder, partition))
+       |> read_reduce([])}
+    end
+  end
+
+  defp read_reduce([], acc), do: :lists.reverse(acc)
+
+  defp read_reduce([event | events], acc) do
+    case event do
+      {:ok, e} -> read_reduce(events, [e | acc])
+      {:error, :unknown_event_type} -> read_reduce(events, acc)
+      err = {:error, _} -> raise inspect(err)
     end
   end
 
   ### Publishing ###
 
-  defp do_publish(client, topic, event, partition, key, data) do
+  defp do_publish(client, topic, partition, key, data) do
     with {:error, {:producer_not_found, _}} <-
-           :brod.produce_sync(client, topic.topic, partition, key, data) do
-      :brod.start_producer(client, topic.topic, [])
-      do_publish(client, topic, event, partition, key, data)
+           :brod.produce_sync(client, topic, partition, key, data) do
+      :brod.start_producer(client, topic, [])
+      do_publish(client, topic, partition, key, data)
     end
   end
 
-  defp do_commit(client, topic, event, partition, key, data) do
+  defp do_commit(client, event, topic, partition, key, data) do
     case :brod.produce_sync_offset(
            client,
-           topic.topic,
+           topic,
            partition,
            key,
            data
@@ -371,8 +381,8 @@ defmodule Kvasir.Source.Kafka do
         {:ok, Kvasir.Event.set_offset(event, offset)}
 
       {:error, {:producer_not_found, _}} ->
-        :brod.start_producer(client, topic.topic, [])
-        do_commit(client, topic, event, partition, key, data)
+        :brod.start_producer(client, topic, [])
+        do_commit(client, event, topic, partition, key, data)
 
       other ->
         other
