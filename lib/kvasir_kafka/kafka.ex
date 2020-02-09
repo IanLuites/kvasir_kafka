@@ -5,39 +5,59 @@ defmodule Kvasir.Kafka do
 
   def offset({:kafka_message, offset, _key, _payload, _, _timestamp, _meta}), do: offset
 
-  def decode({:kafka_message_set, topic, partition, _, messages}, _topic, _partition) do
-    Enum.map(messages, &decode(&1, topic, partition))
+  def decode(
+        {:kafka_message_set, topic, partition, _, messages},
+        _topic,
+        key,
+        decoder,
+        _partition
+      ) do
+    Enum.map(messages, &decode(&1, topic, key, decoder, partition))
   end
 
-  def decode({:kafka_message, offset, key, payload, _, _timestamp, _meta}, topic, partition) do
-    with {:ok, %{"type" => t, "version" => v, "payload" => p}} <- Jason.decode(payload) do
-      Kvasir.Event.Encoding.decode(topic, %{
-        type: t,
-        version: v,
-        meta: %{topic: topic.topic, offset: offset, partition: partition, key: key},
-        payload: p
-      })
-      |> elem(1)
+  def decode(
+        {:kafka_message, offset, k, payload, _, _timestamp, _meta},
+        topic,
+        key,
+        decoder,
+        partition
+      ) do
+    with {:ok, event} <- decoder.bin_decode(payload),
+         {:ok, k} <- key.parse(k, []) do
+      {:ok,
+       %{
+         event
+         | __meta__: %Kvasir.Event.Meta{
+             key: k,
+             topic: topic,
+             partition: partition,
+             offset: offset
+           }
+       }}
     end
   end
 
   def decode?(
-        filter,
-        {:kafka_message, offset, key, payload, _, _timestamp, _meta},
-        topic,
+        decoder,
+        {:kafka_message, offset, k, payload, _, _timestamp, _meta},
+        _topic = %{key: key, topic: topic},
         partition
       ) do
-    with {:ok, %{"type" => t, "version" => v, "payload" => p}} <- Jason.decode(payload) do
-      if filter.(t) do
-        Kvasir.Event.Encoding.decode(topic, %{
-          type: t,
-          version: v,
-          meta: %{topic: topic.topic, offset: offset, partition: partition, key: key},
-          payload: p
-        })
-      else
-        :ok
-      end
+    with {:ok, event} <- decoder.bin_decode(payload),
+         {:ok, k} <- key.parse(k, []) do
+      {:ok,
+       %{
+         event
+         | __meta__: %Kvasir.Event.Meta{
+             key: k,
+             topic: topic,
+             partition: partition,
+             offset: offset
+           }
+       }}
+    else
+      {:error, :unknown_event_type} -> :ok
+      err -> err
     end
   end
 
