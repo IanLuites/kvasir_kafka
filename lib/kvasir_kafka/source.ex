@@ -28,6 +28,7 @@ defmodule Kvasir.Source.Kafka do
 
   def start_link(name, opts \\ []) do
     servers = prepare_servers(opts[:servers])
+    connect_timeout = opts[:connect_timeout] || 120_000
 
     conn_config =
       [
@@ -51,10 +52,10 @@ defmodule Kvasir.Source.Kafka do
         Task.async(fn ->
           0..(partitions - 1)
           |> Enum.map(fn p -> Task.async(fn -> preconnect(name, topic, p) end) end)
-          |> Enum.each(&Task.await(&1, 15_000))
+          |> Enum.each(&Task.await(&1, connect_timeout))
         end)
       end)
-      |> Enum.each(&Task.await(&1, 60_000))
+      |> Enum.each(&Task.await(&1, connect_timeout))
     end
 
     children = [
