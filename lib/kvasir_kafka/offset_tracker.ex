@@ -50,7 +50,7 @@ defmodule Kvasir.Kafka.OffsetTracker do
   defp fetch_offsets(topics, servers, config) do
     topics
     |> Enum.map(fn {t, p} -> Task.async(fn -> fetch_offsets(t, p, servers, config) end) end)
-    |> Enum.flat_map(&Task.await(&1, 15_000))
+    |> Enum.flat_map(&Task.await(&1, 30_000))
     |> Enum.reduce(%{}, fn {t, p, o}, acc ->
       Map.update(acc, t, Offset.create(p, o), &Offset.set(&1, p, o))
     end)
@@ -66,7 +66,9 @@ defmodule Kvasir.Kafka.OffsetTracker do
   end
 
   defp earliest!(topic, partition, servers, config) do
-    {:ok, offset} = :brod_utils.resolve_offset(servers, topic, partition, -2, config)
-    offset
+    case :brod_utils.resolve_offset(servers, topic, partition, -2, config) do
+      {:ok, offset} -> offset
+      {:error, :timeout} -> 0
+    end
   end
 end
