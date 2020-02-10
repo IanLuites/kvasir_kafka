@@ -30,6 +30,7 @@ defmodule Kvasir.Source.Kafka do
     servers = prepare_servers(opts[:servers])
     connect_timeout = opts[:connect_timeout] || 120_000
     start_producers = Keyword.get(opts, :start_producers, true)
+    track_offsets = Keyword.get(opts, :track_offsets, true)
 
     conn_config =
       [
@@ -53,7 +54,7 @@ defmodule Kvasir.Source.Kafka do
         Task.async(fn ->
           0..(partitions - 1)
           |> Enum.map(fn p ->
-            Task.async(fn -> preconnect(name, topic, p, start_producers) end)
+            Task.async(fn -> preconnect(name, topic, p, start_producers, track_offsets) end)
           end)
           |> Enum.each(&Task.await(&1, connect_timeout))
         end)
@@ -61,23 +62,32 @@ defmodule Kvasir.Source.Kafka do
       |> Enum.each(&Task.await(&1, connect_timeout))
     end
 
-    children = [
-      OffsetTracker.child_spec(opts[:initialize], servers, conn_config)
-    ]
+    children =
+      if track_offsets do
+        [
+          OffsetTracker.child_spec(opts[:initialize], servers, conn_config)
+        ]
+      else
+        []
+      end
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Module.concat(name, Supervisor))
   end
 
-  defp preconnect(name, topic, partition, start) do
+  defp preconnect(name, topic, partition, start, track_offsets) do
     if start, do: :brod.start_producer(name, topic, partition: partition)
 
-    :brod.fetch(
-      name,
-      topic,
-      partition,
-      -2,
-      %{max_bytes: 0, max_wait_time: 0}
-    )
+    if track_offsets do
+      :brod.fetch(
+        name,
+        topic,
+        partition,
+        -2,
+        %{max_bytes: 0, max_wait_time: 0}
+      )
+    end
+
+    :ok
   end
 
   defp prepare_servers(nil), do: raise("Need to set `:servers` option.")
