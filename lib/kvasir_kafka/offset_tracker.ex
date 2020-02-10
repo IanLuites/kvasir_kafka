@@ -62,7 +62,7 @@ defmodule Kvasir.Kafka.OffsetTracker do
   defp fetch_offsets(topic, partitions, servers, config) do
     0..(partitions - 1)
     |> Enum.map(fn p -> Task.async(fn -> {topic, p, earliest!(topic, p, servers, config)} end) end)
-    |> Enum.map(&Task.await/1)
+    |> Enum.map(&Task.await(&1, 15_000))
   end
 
   defp earliest!(topic, partition, servers, config) do
