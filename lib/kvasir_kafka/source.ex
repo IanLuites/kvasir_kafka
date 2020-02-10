@@ -29,6 +29,7 @@ defmodule Kvasir.Source.Kafka do
   def start_link(name, opts \\ []) do
     servers = prepare_servers(opts[:servers])
     connect_timeout = opts[:connect_timeout] || 120_000
+    start_producers = Keyword.get(opts, :start_producers, true)
 
     conn_config =
       [
@@ -51,7 +52,9 @@ defmodule Kvasir.Source.Kafka do
       |> Enum.map(fn {topic, partitions} ->
         Task.async(fn ->
           0..(partitions - 1)
-          |> Enum.map(fn p -> Task.async(fn -> preconnect(name, topic, p) end) end)
+          |> Enum.map(fn p ->
+            Task.async(fn -> preconnect(name, topic, p, start_producers) end)
+          end)
           |> Enum.each(&Task.await(&1, connect_timeout))
         end)
       end)
@@ -65,8 +68,8 @@ defmodule Kvasir.Source.Kafka do
     Supervisor.start_link(children, strategy: :one_for_one, name: Module.concat(name, Supervisor))
   end
 
-  defp preconnect(name, topic, partition) do
-    :brod.start_producer(name, topic, partition: partition)
+  defp preconnect(name, topic, partition, start) do
+    if start, do: :brod.start_producer(name, topic, partition: partition)
 
     :brod.fetch(
       name,
