@@ -54,7 +54,7 @@ defmodule Kvasir.Source.Kafka do
         Task.async(fn ->
           0..(partitions - 1)
           |> Enum.map(fn p ->
-            Task.async(fn -> preconnect(name, topic, p, start_producers, track_offsets) end)
+            Task.async(fn -> preconnect(name, topic, p, start_producers) end)
           end)
           |> Enum.each(&Task.await(&1, connect_timeout))
         end)
@@ -74,18 +74,8 @@ defmodule Kvasir.Source.Kafka do
     Supervisor.start_link(children, strategy: :one_for_one, name: Module.concat(name, Supervisor))
   end
 
-  defp preconnect(name, topic, partition, start, track_offsets) do
+  defp preconnect(name, topic, partition, start) do
     if start, do: :brod.start_producer(name, topic, partition: partition)
-
-    if track_offsets do
-      :brod.fetch(
-        name,
-        topic,
-        partition,
-        -2,
-        %{max_bytes: 0, max_wait_time: 0}
-      )
-    end
 
     :ok
   end
