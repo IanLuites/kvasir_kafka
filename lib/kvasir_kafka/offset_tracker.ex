@@ -2,6 +2,8 @@ defmodule Kvasir.Kafka.OffsetTracker do
   use GenServer
   alias Kvasir.Offset
 
+  @offset_timeout 25_000
+  @leader_timeout @offset_timeout + 5_000
   @offset_refresh 5 * 60_000
 
   def offset(topic), do: GenServer.call(__MODULE__, {:offset, topic})
@@ -24,14 +26,16 @@ defmodule Kvasir.Kafka.OffsetTracker do
 
   @impl GenServer
   def handle_call({:offset, topic}, _from, state = {offsets, _, _, _}) do
-    {:reply, Map.get(offsets, topic), state}
+    case Map.fetch(offsets, topic) do
+      {:ok, o} -> {:reply, o, state}
+      _ -> {:reply, nil, state}
+    end
   end
 
   def handle_call({:offset, topic, partition}, _from, state = {offsets, _, _, _}) do
-    if t = Map.get(offsets, topic) do
-      {:reply, Offset.get(t, partition), state}
-    else
-      {:reply, nil, state}
+    case Map.fetch(offsets, topic) do
+      {:ok, o} -> {:reply, Offset.get(o, partition), state}
+      _ -> {:reply, nil, state}
     end
   end
 
@@ -48,27 +52,58 @@ defmodule Kvasir.Kafka.OffsetTracker do
   end
 
   defp fetch_offsets(topics, servers, config) do
-    topics
-    |> Enum.map(fn {t, p} -> Task.async(fn -> fetch_offsets(t, p, servers, config) end) end)
-    |> Enum.flat_map(&Task.await(&1, 30_000))
-    |> Enum.reduce(%{}, fn {t, p, o}, acc ->
-      Map.update(acc, t, Offset.create(p, o), &Offset.set(&1, p, o))
+    {:ok, %{topic_metadata: metadata}} =
+      :brod_utils.get_metadata(servers, Map.keys(topics), config)
+
+    metadata
+    |> leaders()
+    |> Enum.map(fn {_leader, leader_topics} ->
+      Task.async(fn ->
+        topics = [{t, [p | _]} | _] = :maps.to_list(leader_topics)
+        {:ok, conn} = :kpro.connect_partition_leader(servers, config, t, p)
+
+        req =
+          :kpro_req_lib.make(:list_offsets, 1,
+            replica_id: -1,
+            isolation_level: :read_committed,
+            topics:
+              Enum.map(topics, fn {k, v} ->
+                [topic: k, partitions: Enum.map(v, &[partition: &1, timestamp: -2])]
+              end)
+          )
+
+        result =
+          case :kpro.request_sync(conn, req, @offset_timeout) do
+            {:ok, {:kpro_rsp, _, :list_offsets, _, %{responses: r}}} -> r
+            _ -> []
+          end
+
+        :kpro.close_connection(conn)
+
+        Enum.reduce(result, %{}, fn %{topic: t, partition_responses: r}, acc ->
+          Map.put(
+            acc,
+            t,
+            Enum.reduce(r, Offset.create(), &Offset.set(&2, &1.partition, &1.offset))
+          )
+        end)
+      end)
+    end)
+    |> Enum.map(&Task.await(&1, @leader_timeout))
+    |> Enum.reduce(%{}, fn data, acc ->
+      Map.merge(acc, data, fn _, v1, v2 -> Offset.merge(v1, v2) end)
     end)
   end
 
-  defp fetch_offsets(topic, 1, servers, config),
-    do: [{topic, 0, earliest!(topic, 0, servers, config)}]
+  defp leaders(metadata, acc \\ %{})
+  defp leaders([], acc), do: acc
 
-  defp fetch_offsets(topic, partitions, servers, config) do
-    0..(partitions - 1)
-    |> Enum.map(fn p -> Task.async(fn -> {topic, p, earliest!(topic, p, servers, config)} end) end)
-    |> Enum.map(&Task.await(&1, 15_000))
-  end
-
-  defp earliest!(topic, partition, servers, config) do
-    case :brod_utils.resolve_offset(servers, topic, partition, -2, config) do
-      {:ok, offset} -> offset
-      {:error, :timeout} -> 0
-    end
+  defp leaders([%{topic: t, partition_metadata: pm} | metadata], acc) do
+    leaders(
+      metadata,
+      Enum.reduce(pm, acc, fn %{leader: l, partition: p}, a ->
+        Map.update(a, l, %{t => [p]}, fn la -> Map.update(la, t, [p], &[p | &1]) end)
+      end)
+    )
   end
 end
