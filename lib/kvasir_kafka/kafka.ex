@@ -16,7 +16,7 @@ defmodule Kvasir.Kafka do
   end
 
   def decode(
-        {:kafka_message, offset, k, payload, _, _timestamp, _meta},
+        {:kafka_message, offset, k, payload, _, timestamp, _meta},
         topic,
         key,
         decoder,
@@ -32,7 +32,8 @@ defmodule Kvasir.Kafka do
              key_type: key,
              topic: topic,
              partition: partition,
-             offset: offset
+             offset: offset,
+             timestamp: UTCDateTime.from_unix!(timestamp, :millisecond)
            }
        }}
     end
@@ -40,7 +41,7 @@ defmodule Kvasir.Kafka do
 
   def decode?(
         decoder,
-        {:kafka_message, offset, k, payload, _, _timestamp, _meta},
+        {:kafka_message, offset, k, payload, _, timestamp, _meta},
         _topic = %{key: key, topic: topic},
         partition
       ) do
@@ -54,7 +55,8 @@ defmodule Kvasir.Kafka do
              key_type: key,
              topic: topic,
              partition: partition,
-             offset: offset
+             offset: offset,
+             timestamp: UTCDateTime.from_unix!(timestamp, :millisecond)
            }
        }}
     else
