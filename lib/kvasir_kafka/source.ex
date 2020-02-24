@@ -335,21 +335,24 @@ defmodule Kvasir.Source.Kafka do
   end
 
   defp read(client, topic, key, decoder, filter, partition, offset) do
-    with {:ok, {total, m}} =
-           :brod.fetch(
-             client,
-             topic,
-             partition,
-             offset,
-             %{max_bytes: 1024 * 1024, max_wait_time: 0}
-           ) do
-      continue = if e = List.last(m), do: Kvasir.Kafka.offset(e), else: offset
+    case :brod.fetch(
+           client,
+           topic,
+           partition,
+           offset,
+           %{max_bytes: 1024 * 1024, max_wait_time: 0}
+         ) do
+      {:ok, {total, m}} ->
+        continue = if e = List.last(m), do: Kvasir.Kafka.offset(e), else: offset
 
-      {total, continue,
-       m
-       |> Enum.filter(filter)
-       |> Enum.map(&decode(&1, topic, key, decoder, partition))
-       |> read_reduce([])}
+        {total, continue,
+         m
+         |> Enum.filter(filter)
+         |> Enum.map(&decode(&1, topic, key, decoder, partition))
+         |> read_reduce([])}
+
+      {:error, :offset_out_of_range} ->
+        {offset, offset - 1, []}
     end
   end
 
