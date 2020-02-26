@@ -352,7 +352,11 @@ defmodule Kvasir.Source.Kafka do
          |> read_reduce([])}
 
       {:error, :offset_out_of_range} ->
-        {offset, offset - 1, []}
+        t = OffsetTracker.offset(topic, partition)
+
+        if offset >= 0 and offset <= t,
+          do: read(client, topic, key, decoder, filter, partition, t),
+          else: {offset, offset - 1, []}
     end
   end
 
