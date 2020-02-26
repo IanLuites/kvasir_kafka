@@ -2,12 +2,21 @@ defmodule Kvasir.Kafka.OffsetTracker do
   use GenServer
   alias Kvasir.Offset
 
+  @table :kafka_offsets
   @offset_timeout 25_000
   @leader_timeout @offset_timeout + 5_000
   @offset_refresh 5 * 60_000
 
-  def offset(topic), do: GenServer.call(__MODULE__, {:offset, topic})
-  def offset(topic, partition), do: GenServer.call(__MODULE__, {:offset, topic, partition})
+  def offset(topic) do
+    case :ets.lookup(@table, topic) do
+      [{^topic, offset}] -> offset
+      _ -> nil
+    end
+  end
+
+  def offset(topic, partition) do
+    if o = offset(topic), do: Offset.get(o, partition)
+  end
 
   def child_spec(topics, servers, config) do
     %{
@@ -18,8 +27,13 @@ defmodule Kvasir.Kafka.OffsetTracker do
 
   @impl GenServer
   def init({topics, servers, config}) do
+    :ets.new(@table, [:set, :protected, :named_table, read_concurrency: true])
+
     offsets = fetch_offsets(topics, servers, config)
     Process.send_after(self(), :refresh, @offset_refresh)
+
+    # Sync to ETS
+    Enum.each(offsets, &:ets.insert(@table, &1))
 
     {:ok, {offsets, topics, servers, config}}
   end
@@ -47,6 +61,9 @@ defmodule Kvasir.Kafka.OffsetTracker do
   end
 
   def handle_info({:refresh, offsets}, {_, topics, servers, config}) do
+    # Sync to ETS
+    Enum.each(offsets, &:ets.insert(@table, &1))
+
     Process.send_after(self(), :refresh, @offset_refresh)
     {:noreply, {offsets, topics, servers, config}}
   end
