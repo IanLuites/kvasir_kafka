@@ -6,6 +6,7 @@ defmodule Kvasir.Source.Kafka do
   alias Kvasir.Kafka.OffsetTracker
   alias Kvasir.Offset
   import Kvasir.Kafka, only: [decode: 5]
+  require Logger
 
   @impl Kvasir.Source
   def contains?(_name, _topic, _offset) do
@@ -291,11 +292,18 @@ defmodule Kvasir.Source.Kafka do
              {:halt, f}
 
            f = %{partitions: p} ->
-             p
-             |> Enum.map(fn {p, o} ->
-               {p, read(client, topic.topic, topic.key, decoder, pre_filter, p, o)}
+             r =
+               p
+               |> Enum.map(fn {p, o} ->
+                 {p, read(client, topic.topic, topic.key, decoder, pre_filter, p, o)}
+               end)
+               |> Enum.reduce({[], f}, &reducer/2)
+
+             Logger.debug(fn ->
+               "#{inspect(__MODULE__)}[#{inspect(client)}]: Read #{Enum.count(elem(r, 0))}"
              end)
-             |> Enum.reduce({[], f}, &reducer/2)
+
+             r
          end,
          fn _ -> :ok end
        )}
@@ -309,15 +317,22 @@ defmodule Kvasir.Source.Kafka do
              {:halt, f}
 
            f = %{partitions: p} ->
-             p
-             |> Enum.map(fn {p, o} ->
-               {p,
-                Task.async(fn ->
-                  read(client, topic.topic, topic.key, decoder, pre_filter, p, o)
-                end)}
+             r =
+               p
+               |> Enum.map(fn {p, o} ->
+                 {p,
+                  Task.async(fn ->
+                    read(client, topic.topic, topic.key, decoder, pre_filter, p, o)
+                  end)}
+               end)
+               |> Enum.map(fn {p, task} -> {p, Task.await(task)} end)
+               |> Enum.reduce({[], f}, &reducer/2)
+
+             Logger.debug(fn ->
+               "#{inspect(__MODULE__)}[#{inspect(client)}]: Read #{Enum.count(elem(r, 0))}"
              end)
-             |> Enum.map(fn {p, task} -> {p, Task.await(task)} end)
-             |> Enum.reduce({[], f}, &reducer/2)
+
+             r
          end,
          fn _ -> :ok end
        )}
