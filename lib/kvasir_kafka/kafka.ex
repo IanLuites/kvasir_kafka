@@ -30,6 +30,7 @@ defmodule Kvasir.Kafka do
          | __meta__: %Kvasir.Event.Meta{
              key: k,
              key_type: key,
+             sub_key: event.__meta__.sub_key,
              topic: topic,
              partition: partition,
              offset: offset,
@@ -53,6 +54,7 @@ defmodule Kvasir.Kafka do
          | __meta__: %Kvasir.Event.Meta{
              key: k,
              key_type: key,
+             sub_key: event.__meta__.sub_key,
              topic: topic,
              partition: partition,
              offset: offset,
