@@ -404,7 +404,12 @@ defmodule Kvasir.Source.Kafka do
            data
          ) do
       {:ok, offset} ->
-        {:ok, Kvasir.Event.set_offset(event, offset)}
+        {:ok,
+         event
+         |> Kvasir.Event.set_offset(offset)
+         |> Kvasir.Event.set_key(key)
+         |> Kvasir.Event.set_partition(partition)
+         |> Kvasir.Event.set_topic(topic)}
 
       {:error, {:producer_not_found, _}} ->
         :brod.start_producer(client, topic, [])
