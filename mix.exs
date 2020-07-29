@@ -61,7 +61,7 @@ defmodule Kvasir.Kafka.MixProject do
 
   defp deps do
     [
-      {:brod, "~> 3.8"},
+      {:brod, "~> 3.14"},
       {:kvasir, git: "https://github.com/IanLuites/kvasir", branch: "release/v1.0"}
     ]
   end
