@@ -139,13 +139,17 @@ defmodule Kvasir.Source.Kafka do
 
     starter = self()
 
+    consumer_config =
+      opts |> Keyword.get(:consumer_config, []) |> Keyword.put(:begin_offset, begin)
+
     fn ->
       with {:ok, c} <- client_start_link(client),
            {:ok, _} <-
              :brod_group_subscriber_v2.start_link(%{
                client: c,
                group_id: opts[:group],
-               consumer_config: [begin_offset: begin],
+               group_config: Keyword.get(opts, :group_config, []),
+               consumer_config: consumer_config,
                cb_module: Kvasir.Kafka.Subscriber,
                topics: [topic.topic],
                message_type: :message,
