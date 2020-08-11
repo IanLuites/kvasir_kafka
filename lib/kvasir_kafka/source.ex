@@ -286,6 +286,8 @@ defmodule Kvasir.Source.Kafka do
 
     decoder = if(only = opts[:events], do: topic.module.filter(only), else: topic.module)
 
+    read_timeout = Keyword.get(opts, :read_timeout, 60_000)
+
     if Enum.count(offset.partitions) == 1 do
       # Single Read
       {:ok,
@@ -329,7 +331,7 @@ defmodule Kvasir.Source.Kafka do
                     read(client, topic.topic, topic.key, decoder, pre_filter, p, o)
                   end)}
                end)
-               |> Enum.map(fn {p, task} -> {p, Task.await(task)} end)
+               |> Enum.map(fn {p, task} -> {p, Task.await(task, read_timeout)} end)
                |> Enum.reduce({[], f}, &reducer/2)
 
              Logger.debug(fn ->
