@@ -1,10 +1,8 @@
 defmodule Kvasir.Kafka.Subscriber do
+  require Logger
+
   def init(_group = %{partition: p}, {topic, offset, decoder, callback_module, state}) do
     {:ok, new_state} = callback_module.init(topic, p, state)
-
-    if parent = :"$ancestors" |> Process.get([]) |> List.last() do
-      Process.link(parent)
-    end
 
     {:ok,
      %{
@@ -38,8 +36,12 @@ defmodule Kvasir.Kafka.Subscriber do
           error -> error
         end
       else
-        :ok -> {:ok, :commit, state}
-        err -> err
+        :ok ->
+          {:ok, :commit, state}
+
+        err ->
+          Logger.error("Kvasir Kafka: Subscriber Error: #{inspect(err)}", error: err)
+          err
       end
     end
   end
