@@ -137,32 +137,34 @@ defmodule Kvasir.Source.Kafka do
 
     decoder = if(only = opts[:only], do: topic.module.filter(only), else: topic.module)
 
-    starter = self()
-
     consumer_config =
       opts |> Keyword.get(:consumer_config, []) |> Keyword.put(:begin_offset, begin)
 
-    fn ->
-      with {:ok, c} <- client_start_link(client),
-           {:ok, _} <-
-             :brod_group_subscriber_v2.start_link(%{
-               client: c,
-               group_id: opts[:group],
-               group_config: Keyword.get(opts, :group_config, []),
-               consumer_config: consumer_config,
-               cb_module: Kvasir.Kafka.Subscriber,
-               topics: [topic.topic],
-               message_type: :message,
-               init_data: {topic, offset, decoder, callback_module, opts[:state]}
-             }) do
-        send(starter, :subscriber_up)
-        Process.sleep(:infinity)
-      else
-        err -> send(starter, {:subscriber_failed, err})
-      end
+    with {:ok, c, spec} <- client_child_spec(client) do
+      children = [
+        spec,
+        %{
+          id: :subscriber,
+          type: :supervisor,
+          start:
+            {:brod_group_subscriber_v2, :start_link,
+             [
+               %{
+                 client: c,
+                 group_id: opts[:group],
+                 group_config: Keyword.get(opts, :group_config, []),
+                 consumer_config: consumer_config,
+                 cb_module: Kvasir.Kafka.Subscriber,
+                 topics: [topic.topic],
+                 message_type: :message,
+                 init_data: {topic, offset, decoder, callback_module, opts[:state]}
+               }
+             ]}
+        }
+      ]
+
+      Supervisor.start_link(children, strategy: :rest_for_one)
     end
-    |> spawn_link
-    |> wait_for_subscribe()
   end
 
   @impl Kvasir.Source
@@ -230,6 +232,19 @@ defmodule Kvasir.Source.Kafka do
     with {:ok, _} <- :brod.start_link_client(hosts, name, config) do
       {:ok, name}
     end
+  end
+
+  @spec client_child_spec(atom) :: {:ok, atom, Supervisor.child_spec()} | {:error, term}
+  def client_child_spec(client) do
+    {:state, _, hosts, _, _, _, _, c, _} = client |> Process.whereis() |> :sys.get_state()
+    config = Keyword.take(c, ~w(query_api_versions reconnect_cool_down_seconds sasl ssl)a)
+    name = free_client()
+
+    {:ok, name,
+     %{
+       id: :client,
+       start: {:brod, :start_link_client, [hosts, name, config]}
+     }}
   end
 
   @spec free_client(non_neg_integer) :: atom
