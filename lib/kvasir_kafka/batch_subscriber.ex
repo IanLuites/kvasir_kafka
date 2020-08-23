@@ -3,6 +3,16 @@ defmodule Kvasir.Kafka.BatchSubscriber do
 
   def init(_group = %{partition: p}, {topic, offset, decoder, callback_module, state}) do
     {:ok, new_state} = callback_module.init(topic, p, state)
+    t = topic.topic
+
+    group =
+      self()
+      |> Process.info()
+      |> Keyword.get(:dictionary)
+      |> Keyword.get(:"$ancestors")
+      |> List.first()
+
+    ack = fn offset -> :brod_group_subscriber_v2.commit(group, t, p, offset) end
 
     {:ok,
      %{
@@ -11,7 +21,8 @@ defmodule Kvasir.Kafka.BatchSubscriber do
        offset: Kvasir.Offset.get(offset, p),
        decoder: decoder,
        subscriber: callback_module,
-       state: new_state
+       state: new_state,
+       ack: ack
      }}
   end
 
@@ -23,7 +34,8 @@ defmodule Kvasir.Kafka.BatchSubscriber do
           decoder: decoder,
           state: s,
           subscriber: sub,
-          topic: topic
+          topic: topic,
+          ack: ack
         }
       ) do
     case prepare_batch(messages, offset, {decoder, topic, partition}) do
@@ -31,11 +43,9 @@ defmodule Kvasir.Kafka.BatchSubscriber do
         {:ok, :commit, state}
 
       {:ok, events} ->
-        case sub.event_batch(events, s) do
-          :ok -> {:ok, :commit, state}
-          {:ok, new_s} -> {:ok, :commit, %{state | state: new_s}}
-          error -> error
-        end
+        sub.event_async_batch(ack, events, s)
+
+        {:ok, state}
 
       err ->
         Logger.error("Kvasir Kafka: Subscriber Error: #{inspect(err)}", error: err)
