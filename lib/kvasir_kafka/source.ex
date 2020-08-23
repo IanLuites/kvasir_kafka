@@ -140,6 +140,12 @@ defmodule Kvasir.Source.Kafka do
     consumer_config =
       opts |> Keyword.get(:consumer_config, []) |> Keyword.put(:begin_offset, begin)
 
+    {cb_module, message_type} =
+      case opts[:mode] do
+        :batch -> {Kvasir.Kafka.BatchSubscriber, :message_set}
+        _ -> {Kvasir.Kafka.Subscriber, :message}
+      end
+
     with {:ok, c, spec} <- client_child_spec(client) do
       children = [
         spec,
@@ -154,9 +160,9 @@ defmodule Kvasir.Source.Kafka do
                  group_id: opts[:group],
                  group_config: Keyword.get(opts, :group_config, []),
                  consumer_config: consumer_config,
-                 cb_module: Kvasir.Kafka.Subscriber,
+                 cb_module: cb_module,
                  topics: [topic.topic],
-                 message_type: :message,
+                 message_type: message_type,
                  init_data: {topic, offset, decoder, callback_module, opts[:state]}
                }
              ]}
