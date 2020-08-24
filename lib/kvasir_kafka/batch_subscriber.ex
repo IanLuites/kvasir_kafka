@@ -4,8 +4,20 @@ defmodule Kvasir.Kafka.BatchSubscriber do
   def init(_group = %{partition: p}, {topic, offset, decoder, callback_module, state}) do
     {:ok, new_state} = callback_module.init(topic, p, state)
 
+    t = topic.topic
     consumer = self()
-    ack = fn offset -> :brod_topic_subscriber.ack(consumer, p, offset) end
+
+    group =
+      self()
+      |> Process.info()
+      |> Keyword.get(:dictionary)
+      |> Keyword.get(:"$ancestors")
+      |> List.first()
+
+    ack = fn offset ->
+      :brod_group_subscriber_v2.commit(group, t, p, offset)
+      :brod_topic_subscriber.ack(consumer, p, offset)
+    end
 
     {:ok,
      %{
