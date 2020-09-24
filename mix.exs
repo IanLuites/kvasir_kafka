@@ -4,7 +4,7 @@ defmodule Kvasir.Kafka.MixProject do
 
   def project do
     [
-      app: :kvasir_kafka,
+      app: :csh2fjhyll_kvasir_kafka,
       description: "Kafka [event] source for Kvasir.",
       version: @version,
       elixir: "~> 1.7",
@@ -36,7 +36,7 @@ defmodule Kvasir.Kafka.MixProject do
 
   def package do
     [
-      name: :kvasir_kafka,
+      name: :csh2fjhyll_kvasir_kafka,
       maintainers: ["Ian Luites"],
       licenses: ["MIT"],
       files: [
@@ -62,7 +62,8 @@ defmodule Kvasir.Kafka.MixProject do
   defp deps do
     [
       {:brod, "~> 3.14"},
-      {:kvasir, git: "https://github.com/IanLuites/kvasir", branch: "release/v1.0"}
+      {:csh2fjhyll_kvasir, ">= 0.0.0"},
+      {:ex_doc, ">= 0.0.0", only: :dev, runtime: false}
     ]
   end
 end
