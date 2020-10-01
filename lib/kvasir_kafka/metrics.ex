@@ -62,6 +62,8 @@ defmodule Kvasir.Kafka.Metrics do
       end,
       "lib/kvasir_kafka/metrics/sender.ex"
     )
+
+    :ok
   end
 
   @spec open(binary | URI.t()) :: {:ok, port, [byte, ...]}
