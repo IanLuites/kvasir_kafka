@@ -28,6 +28,8 @@ defmodule Kvasir.Source.Kafka do
   end
 
   def start_link(name, opts \\ []) do
+    Kvasir.Kafka.Metrics.create()
+
     servers = prepare_servers(opts[:servers])
     connect_timeout = opts[:connect_timeout] || 120_000
     start_producers = Keyword.get(opts, :start_producers, true)
@@ -106,7 +108,12 @@ defmodule Kvasir.Source.Kafka do
     with {:ok, k} <- topic.key.dump(key, []),
          {:ok, p} <- topic.key.partition(key, topic.partitions),
          {:ok, data} <- topic.module.bin_encode(event) do
-      do_publish(client, topic.topic, p, to_string(k), data)
+      t = topic.topic
+      start = :erlang.monotonic_time()
+
+      client
+      |> do_publish(t, p, to_string(k), data)
+      |> report_publish_metric(t, p, start)
     end
   end
 
@@ -118,8 +125,32 @@ defmodule Kvasir.Source.Kafka do
          {:ok, p} <- topic.key.partition(key, topic.partitions),
          e = %{event | __meta__: %{meta | key: nil, topic: nil, partition: nil}},
          {:ok, data} <- topic.module.bin_encode(e) do
-      do_commit(client, event, topic.topic, p, to_string(k), data)
+      t = topic.topic
+      start = :erlang.monotonic_time()
+
+      client
+      |> do_commit(event, t, p, to_string(k), data)
+      |> report_publish_metric(t, p, start)
     end
+  end
+
+  defp report_publish_metric(result, topic, partition, start) do
+    stop = :erlang.monotonic_time()
+    ms = :erlang.convert_time_unit(stop - start, :native, :millisecond)
+
+    success = if match?({:ok, _}, result), do: ",success:true", else: ",success:false"
+
+    Kvasir.Kafka.Metrics.Sender.send([
+      "kvasir.kafka.publish.timer:",
+      to_string(ms),
+      "|ms|#topic:",
+      topic,
+      ",partition:",
+      to_string(partition),
+      success
+    ])
+
+    result
   end
 
   ### Reading ###
