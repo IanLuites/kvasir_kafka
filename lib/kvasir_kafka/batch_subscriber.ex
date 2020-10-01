@@ -59,7 +59,7 @@ defmodule Kvasir.Kafka.BatchSubscriber do
   end
 
   defp prepare_batch(batch, offset, state, acc \\ [])
-  defp prepare_batch([], offset, state, acc), do: {:ok, :lists.reverse(acc)}
+  defp prepare_batch([], _offset, _state, acc), do: {:ok, :lists.reverse(acc)}
 
   defp prepare_batch(
          [message = {:kafka_message, o, _, _, _, _, _} | batch],
