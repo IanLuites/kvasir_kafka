@@ -102,7 +102,7 @@ defmodule Kvasir.Source.Kafka do
   ### Writing ###
 
   @impl Kvasir.Source
-  def publish(client, topic, event) do
+  def publish(client, topic, event = %type{}) do
     key = Kvasir.Event.key(event)
 
     with {:ok, k} <- topic.key.dump(key, []),
@@ -113,14 +113,14 @@ defmodule Kvasir.Source.Kafka do
 
       client
       |> do_publish(t, p, to_string(k), data)
-      |> report_publish_metric(t, p, start)
+      |> report_publish_metric(type, t, p, start)
     end
   end
 
   @impl Kvasir.Source
   def commit(client, topic, event)
 
-  def commit(client, topic, event = %{__meta__: meta = %{key: key}}) do
+  def commit(client, topic, event = %type{__meta__: meta = %{key: key}}) do
     with {:ok, k} <- topic.key.dump(key, []),
          {:ok, p} <- topic.key.partition(key, topic.partitions),
          e = %{event | __meta__: %{meta | key: nil, topic: nil, partition: nil}},
@@ -130,11 +130,11 @@ defmodule Kvasir.Source.Kafka do
 
       client
       |> do_commit(event, t, p, to_string(k), data)
-      |> report_publish_metric(t, p, start)
+      |> report_publish_metric(type, t, p, start)
     end
   end
 
-  defp report_publish_metric(result, topic, partition, start) do
+  defp report_publish_metric(result, event, topic, partition, start) do
     stop = :erlang.monotonic_time()
     ms = :erlang.convert_time_unit(stop - start, :native, :millisecond)
 
@@ -143,7 +143,9 @@ defmodule Kvasir.Source.Kafka do
     Kvasir.Kafka.Metrics.Sender.send([
       "kvasir.kafka.publish.timer:",
       to_string(ms),
-      "|ms|#topic:",
+      "|ms|#event:",
+      event.__event__(:type),
+      ",topic:",
       topic,
       ",partition:",
       to_string(partition),

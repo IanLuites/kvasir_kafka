@@ -11,7 +11,7 @@ defmodule Kvasir.Kafka.Metrics.Sender do
 end
 
 defmodule Kvasir.Kafka.Metrics do
-  @name :kafka_kafka_metrics
+  @name :kvasir_kafka_metrics
   @default_port 8125
   @supported_protocols ~W(statsd+udp statsd2+udp statsd statsd2 udp)
 
