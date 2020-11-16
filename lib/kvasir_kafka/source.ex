@@ -5,7 +5,9 @@ defmodule Kvasir.Source.Kafka do
   @behaviour Kvasir.Source
   alias Kvasir.Kafka.OffsetTracker
   alias Kvasir.Offset
+  import Kvasir.Client
   import Kvasir.Kafka, only: [decode: 5]
+  import Kvasir.Publisher
   require Logger
 
   @impl Kvasir.Source
@@ -101,21 +103,21 @@ defmodule Kvasir.Source.Kafka do
 
   ### Writing ###
 
-  @impl Kvasir.Source
-  def publish(client, topic, event = %type{}) do
-    key = Kvasir.Event.key(event)
+  # @impl Kvasir.Source
+  # def publish(client, topic, event = %type{}) do
+  #   key = Kvasir.Event.key(event)
 
-    with {:ok, k} <- topic.key.dump(key, []),
-         {:ok, p} <- topic.key.partition(key, topic.partitions),
-         {:ok, data} <- topic.module.bin_encode(event) do
-      t = topic.topic
-      start = :erlang.monotonic_time()
+  #   with {:ok, k} <- topic.key.dump(key, []),
+  #        {:ok, p} <- topic.key.partition(key, topic.partitions),
+  #        {:ok, data} <- topic.module.bin_encode(event) do
+  #     t = topic.topic
+  #     start = :erlang.monotonic_time()
 
-      client
-      |> do_publish(t, p, to_string(k), data)
-      |> report_publish_metric(type, t, p, start)
-    end
-  end
+  #     client
+  #     |> do_publish(t, p, to_string(k), data)
+  #     |> report_publish_metric(type, t, p, start)
+  #   end
+  # end
 
   @impl Kvasir.Source
   def commit(client, topic, event)
@@ -132,27 +134,6 @@ defmodule Kvasir.Source.Kafka do
       |> do_commit(event, t, p, to_string(k), data)
       |> report_publish_metric(type, t, p, start)
     end
-  end
-
-  defp report_publish_metric(result, event, topic, partition, start) do
-    stop = :erlang.monotonic_time()
-    ms = :erlang.convert_time_unit(stop - start, :native, :millisecond)
-
-    success = if match?({:ok, _}, result), do: ",success:true", else: ",success:false"
-
-    Kvasir.Kafka.Metrics.Sender.send([
-      "kvasir.kafka.publish.timer:",
-      to_string(ms),
-      "|ms|#event:",
-      event.__event__(:type),
-      ",topic:",
-      topic,
-      ",partition:",
-      to_string(partition),
-      success
-    ])
-
-    result
   end
 
   ### Reading ###
@@ -259,41 +240,6 @@ defmodule Kvasir.Source.Kafka do
       5_000 ->
         Process.exit(controller, :kill)
         {:error, :subscribe_timeout}
-    end
-  end
-
-  @spec client_start_link(atom) :: {:ok, atom} | {:error, term}
-  def client_start_link(client) do
-    {:state, _, hosts, _, _, _, _, c, _} = client |> Process.whereis() |> :sys.get_state()
-    config = Keyword.take(c, ~w(query_api_versions reconnect_cool_down_seconds sasl ssl)a)
-    name = free_client()
-
-    with {:ok, _} <- :brod.start_link_client(hosts, name, config) do
-      {:ok, name}
-    end
-  end
-
-  @spec client_child_spec(atom) :: {:ok, atom, Supervisor.child_spec()} | {:error, term}
-  def client_child_spec(client) do
-    {:state, _, hosts, _, _, _, _, c, _} = client |> Process.whereis() |> :sys.get_state()
-    config = Keyword.take(c, ~w(query_api_versions reconnect_cool_down_seconds sasl ssl)a)
-    name = free_client()
-
-    {:ok, name,
-     %{
-       id: :client,
-       start: {:brod, :start_link_client, [hosts, name, config]}
-     }}
-  end
-
-  @spec free_client(non_neg_integer) :: atom
-  defp free_client(id \\ 0) do
-    client = :"Elixir.Kvasir.Kafka.Client#{id}"
-
-    if Process.whereis(client) do
-      free_client(id + 1)
-    else
-      client
     end
   end
 
@@ -445,38 +391,18 @@ defmodule Kvasir.Source.Kafka do
     end
   end
 
-  ### Publishing ###
+  @impl Kvasir.Source
+  def start_dedicated_publisher(name, publisher, opts)
 
-  defp do_publish(client, topic, partition, key, data) do
-    with {:error, {:producer_not_found, _}} <-
-           :brod.produce_sync(client, topic, partition, key, data) do
-      :brod.start_producer(client, topic, [])
-      do_publish(client, topic, partition, key, data)
-    end
+  def start_dedicated_publisher(name, publisher, _opts) do
+    client_start_link(name, name: publisher, named: false)
+  rescue
+    _ ->
+      :timer.sleep(Enum.random(1..5))
+      client_start_link(name, name: publisher, named: false)
   end
 
-  defp do_commit(client, event, topic, partition, key, data) do
-    case :brod.produce_sync_offset(
-           client,
-           topic,
-           partition,
-           key,
-           data
-         ) do
-      {:ok, offset} ->
-        {:ok,
-         event
-         |> Kvasir.Event.set_offset(offset)
-         |> Kvasir.Event.set_key(key)
-         |> Kvasir.Event.set_partition(partition)
-         |> Kvasir.Event.set_topic(topic)}
-
-      {:error, {:producer_not_found, _}} ->
-        :brod.start_producer(client, topic, [])
-        do_commit(client, event, topic, partition, key, data)
-
-      other ->
-        other
-    end
-  end
+  @impl Kvasir.Source
+  def dedicated_commit(name, publisher, topic, event)
+  def dedicated_commit(_, client, t, e), do: commit(client, t, e)
 end
