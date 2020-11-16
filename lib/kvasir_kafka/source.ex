@@ -392,17 +392,115 @@ defmodule Kvasir.Source.Kafka do
   end
 
   @impl Kvasir.Source
-  def start_dedicated_publisher(name, publisher, opts)
+  def generate_dedicated_publisher(name, target, topic, opts)
 
-  def start_dedicated_publisher(name, publisher, _opts) do
-    client_start_link(name, name: publisher, named: false)
-  rescue
-    _ ->
-      :timer.sleep(Enum.random(1..5))
-      client_start_link(name, name: publisher, named: false)
+  def generate_dedicated_publisher(
+        name,
+        target,
+        %{key: key, module: module, partitions: partitions, topic: topic},
+        opts
+      ) do
+    pool_size = Keyword.get(opts, :pool_size, 1)
+
+    {client, extra} =
+      if pool_size > 1 do
+        diff = -(:erlang.unique_integer([:positive]) - :erlang.unique_integer([:positive]))
+        clients = Enum.map(1..pool_size, &Module.concat([target, "C#{&1}"]))
+
+        get =
+          Enum.reduce(
+            Enum.with_index(clients),
+            quote do
+              @spec client(non_neg_integer) :: module
+              defp client(id)
+            end,
+            fn {w, i}, acc ->
+              quote do
+                unquote(acc)
+                defp client(unquote(i)), do: unquote(w)
+              end
+            end
+          )
+
+        {quote do
+           [:positive]
+           |> :erlang.unique_integer()
+           |> :erlang.div(unquote(diff))
+           |> rem(unquote(Enum.count(clients)))
+           |> client()
+         end,
+         quote do
+           @doc false
+           def start_link(opts \\ [])
+
+           def start_link(_opts) do
+             children =
+               Enum.map(unquote(clients), fn c ->
+                 {:ok, ^c, spec} = client_child_spec(unquote(name), name: c)
+                 Map.put(spec, :id, c)
+               end)
+
+             Supervisor.start_link(children, strategy: :one_for_one, name: __MODULE__)
+           end
+
+           unquote(get)
+         end}
+      else
+        {quote(do: __MODULE__),
+         quote do
+           @doc false
+           def start_link(opts \\ [])
+
+           def start_link(_opts),
+             do: client_start_link(unquote(name), name: __MODULE__, named: false)
+         end}
+      end
+
+    Code.compiler_options(ignore_module_conflict: true)
+
+    compiled =
+      Code.compile_quoted(
+        quote do
+          defmodule unquote(target) do
+            @moduledoc false
+            import Kvasir.Client
+            import Kvasir.Publisher
+
+            @doc false
+            def child_spec(opts \\ [])
+
+            def child_spec(opts) do
+              %{
+                id: __MODULE__,
+                type: :supervisor,
+                start: {__MODULE__, :start_link, [opts]}
+              }
+            end
+
+            unquote(extra)
+
+            @doc false
+            @spec publish(Kvasir.Event.t()) :: {:ok, Kvasir.Event.t()} | {:error, term}
+            def publish(event)
+
+            def publish(event = %type{__meta__: meta = %{key: key}}) do
+              with {:ok, k} <- unquote(key).dump(key, []),
+                   {:ok, p} <- unquote(key).partition(key, unquote(partitions)),
+                   e = %{event | __meta__: %{meta | key: nil, topic: nil, partition: nil}},
+                   {:ok, data} <- unquote(module).bin_encode(e) do
+                start = :erlang.monotonic_time()
+
+                unquote(client)
+                |> do_commit(event, unquote(topic), p, to_string(k), data)
+                |> report_publish_metric(type, unquote(topic), p, start)
+              end
+            end
+          end
+        end
+      )
+
+    Code.compiler_options(ignore_module_conflict: false)
+
+    if match?([{_, _}], compiled), do: :ok, else: {:error, :failed_to_compile_dedicated_publisher}
   end
-
-  @impl Kvasir.Source
-  def dedicated_commit(name, publisher, topic, event)
-  def dedicated_commit(_, client, t, e), do: commit(client, t, e)
 end

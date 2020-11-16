@@ -24,6 +24,7 @@ defmodule Kvasir.Client do
     {:ok, name,
      %{
        id: :client,
+       type: :supervisor,
        start: {:brod, :start_link_client, [hosts, name, config]}
      }}
   end
