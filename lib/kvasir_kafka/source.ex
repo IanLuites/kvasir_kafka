@@ -152,7 +152,10 @@ defmodule Kvasir.Source.Kafka do
     decoder = if(only = opts[:only], do: topic.module.filter(only), else: topic.module)
 
     consumer_config =
-      opts |> Keyword.get(:consumer_config, []) |> Keyword.put(:begin_offset, begin)
+      opts
+      |> Keyword.get(:consumer_config, [])
+      |> Keyword.put(:begin_offset, begin)
+      |> Keyword.put_new(:offset_reset_policy, :reset_to_earliest)
 
     {cb_module, message_type} =
       case opts[:mode] do
