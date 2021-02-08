@@ -13,6 +13,7 @@ defmodule Kvasir.Publisher do
          |> Kvasir.Event.set_offset(offset)
          |> Kvasir.Event.set_key(key)
          |> Kvasir.Event.set_partition(partition)
+         |> Kvasir.Event.set_timestamp(UTCDateTime.utc_now())
          |> Kvasir.Event.set_topic(topic)}
 
       {:error, {:producer_not_found, _}} ->
